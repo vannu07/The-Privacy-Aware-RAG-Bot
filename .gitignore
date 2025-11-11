@@ -1,3 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+
+# Virtualenv
+.venv/
+env/
+venv/
+
+# SQLite DB
+app/data.db
+
+# Logs and local files
+server.log
+*.local.backup
+
+# pytest
+.pytest_cache/
+
+# Editor
+.vscode/
+.idea/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
