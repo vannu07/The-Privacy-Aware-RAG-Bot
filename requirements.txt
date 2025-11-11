@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-jose[cryptography]
+requests
+pytest
+httpx
+sentence-transformers
+faiss-cpu
+numpy

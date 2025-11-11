@@ -1,0 +1,127 @@
+# The-Privacy-Aware-RAG-Bot
+
+Privacy-Aware RAG Bot (Demo - Auth0 FGA focus)
+
+This repository is a focused demo showing how to enforce document-level authorization in a Retrieval-Augmented Generation (RAG) workflow using an Auth0 FGA-inspired approach.
+
+Goal
+ - Demonstrate that sensitive documents (e.g., salary sheets) are only returned to users authorized to view them.
+ - Provide a small, runnable Python/FastAPI demo that enforces per-document access rules. The project supports optional integration with a real Auth0 FGA endpoint; otherwise it runs with a local, transparent FGA mock backed by SQLite for demos and tests.
+
+Key points
+ - Written in Python (FastAPI) to match your preference.
+ - Primary enforcement happens at retrieval time: documents found by the RAG index are filtered through the FGA check before being returned to the requester or LLM.
+ - Includes a test script that proves a manager (bob) can access a sensitive salary doc while a regular employee (alice) cannot.
+
+Files added
+ - `app/` - FastAPI application code
+	 - `main.py` - FastAPI routes (login, add doc, query)
+	 - `auth.py` - lightweight JWT-based demo auth and user store
+	 - `db.py` - SQLite-backed simple document store and FGA relationship store
+	 - `fga.py` - FGA client: calls Auth0 FGA if configured, otherwise uses the local DB-backed mock
+	 - `models.py` - pydantic models
+ - `tests/test_access.py` - a simple integration script demonstrating manager vs employee access
+ - `requirements.txt`, `Dockerfile`
+
+How it enforces privacy
+ - When a query runs, documents are retrieved from the local document store (a simple LIKE-based search for demo purposes).
+ - Before returning any document, the code checks FGA: `fga_client.check(subject, 'can_view', object)`.
+ - The `FGAClient` will call a configured Auth0 FGA endpoint when `AUTH0_FGA_URL` and `AUTH0_FGA_TOKEN` envvars are present. If those are not provided, the client consults the local `fga_relationships` table.
+
+Demo users & seeded data
+ - `bob` (manager, hr) — has `user:bob` relationship to `document:doc_salary_2024` and therefore can view the salary document.
+ - `alice` (employee, engineering) — does not have direct view rights on the salary doc and therefore will be denied.
+ - Both roles can view `document:doc_budget_q4`.
+
+Quickstart (local)
+1. Create a Python virtualenv and install dependencies
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+2. Start the app
+
+```bash
+uvicorn app.main:app --reload
+```
+
+3. Run the test script (in a separate terminal)
+
+```bash
+python tests/test_access.py
+```
+
+You should see that `bob` receives the salary doc in the results while `alice` receives no results for the same query.
+
+Running with real Auth0 FGA
+ - If you have an Auth0 FGA instance and want to use the real API, set the following environment variables before starting the app:
+	 - `AUTH0_FGA_URL` - URL of your FGA check endpoint (POST), expecting JSON {subject, relation, object} and returning {allowed: true|false}
+	 - `AUTH0_FGA_TOKEN` - an API token allowed to call the FGA API
+
+Security and caveats
+ - This demo uses a local, simple JWT secret (`APP_SECRET=devsecret`) and an in-memory user store for convenience. For any real deployment, use Auth0 (or another IDP) for authentication and rotate secrets.
+ - The RAG retrieval here is a simple SQL LIKE search for demo purposes. Swap in your vector DB / LLM pipeline (LlamaIndex, LangChain) for production and ensure you call FGA checks on the documents before sending context to the model.
+
+References and inspirations
+ - Auth0 for AI Agents (Auth0 docs)
+ - Sample Auth0 projects:
+	 - https://github.com/auth0-samples/auth0-assistant0
+	 - https://github.com/kazemicode/labs-auth0-fga-for-rag
+
+Next steps (suggested enhancements)
+ - Replace the retrieval step with a vector DB (FAISS/Weaviate/Pinecone) and attach document IDs to vectors, then call FGA on returned candidates.
+ - Integrate real Auth0 OIDC login flow instead of the demo `POST /login`.
+ - Expand relationship semantics (e.g., department-based access, attribute-based rules, hierarchical groups).
+
+If you want, I can now:
+ - Run the app and execute the tests in this container and report results.
+ - Add a small example that shows integrating with LangChain / LlamaIndex and where to insert FGA checks.
+
+Completed enhancements in this branch
+ - Optional vector-based retrieval (FAISS) using `sentence-transformers` is available. Enable it by setting the environment variable `USE_VECTOR=1`. On startup the vector index is built from documents in the SQLite store.
+ - Auth0 token verification support: when `AUTH0_DOMAIN` and `AUTH0_AUDIENCE` are set, the server validates incoming JWTs using Auth0 JWKS and maps claims into the FGA subject. See `app/auth.py` for the mapping.
+ - A local mock FGA endpoint is available at `POST /mock-fga/check` for testing the FGA client without a real Auth0 instance. It accepts JSON `{subject, relation, object}` and returns `{allowed: true|false}`.
+ - Tests converted to `pytest` (see `tests/test_access_pytest.py`) and a GitHub Actions CI workflow was added at `.github/workflows/ci.yml` to run tests on push/PR.
+
+How to use the new features locally
+
+1) Vector search (optional)
+
+Install dependencies (already added to `requirements.txt`):
+
+```bash
+pip install -r requirements.txt
+```
+
+Build and run the server with the vector index enabled:
+
+```bash
+USE_VECTOR=1 uvicorn app.main:app --reload
+```
+
+2) Auth0 token validation (optional)
+
+If you want to accept real Auth0 tokens, set these envvars when starting the server:
+
+```bash
+export AUTH0_DOMAIN="your-tenant.auth0.com"
+export AUTH0_AUDIENCE="your-api-audience"
+uvicorn app.main:app
+```
+
+The server will fetch the JWKS from Auth0 and validate incoming bearer tokens. Claims mapping in `app/auth.py` uses `https://example.com/role` and `https://example.com/department` as example custom claim names; adapt to your tenant's claim names.
+
+3) Mock FGA endpoint
+
+You can test the real FGA client by pointing `AUTH0_FGA_URL` to the local mock endpoint. For example, in another terminal:
+
+```bash
+curl -X POST http://127.0.0.1:8000/mock-fga/check -H "Content-Type: application/json" -d '{"subject":"user:bob","relation":"can_view","object":"document:doc_salary_2024"}'
+```
+
+This will return `{"allowed": true}` for seeded relationships.
+
+Enjoy — open an issue or tell me which next step you want and I’ll implement it.
