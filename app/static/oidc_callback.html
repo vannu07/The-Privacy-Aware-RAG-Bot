@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>OIDC Callback - Tokens</title>
+  </head>
+  <body>
+    <h2>OIDC Callback - Tokens</h2>
+    <p>If this page was opened by the OIDC callback it will display tokens returned by the server.</p>
+    <pre id="tokens">(tokens will appear here)</pre>
+    <script>
+      // If the server returned tokens via URL fragment, show them.
+      const params = new URLSearchParams(window.location.search);
+      const t = params.get('tokens');
+      if (t) {
+        try {
+          const obj = JSON.parse(decodeURIComponent(t));
+          document.getElementById('tokens').textContent = JSON.stringify(obj, null, 2);
+        } catch (e) {
+          document.getElementById('tokens').textContent = t;
+        }
+      }
+    </script>
+  </body>
+</html>
