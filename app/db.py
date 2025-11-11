@@ -104,6 +104,25 @@ def add_relationship(subject: str, relation: str, obj: str):
     conn.commit()
     conn.close()
 
+
+def remove_relationship(subject: str, relation: str, obj: str) -> bool:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM fga_relationships WHERE subject=? AND relation=? AND object=?", (subject, relation, obj))
+    affected = cur.rowcount
+    conn.commit()
+    conn.close()
+    return affected > 0
+
+
+def list_relationships() -> List[Dict[str, Any]]:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT subject, relation, object FROM fga_relationships ORDER BY id DESC")
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
 def check_relationship(subject: str, relation: str, obj: str) -> bool:
     conn = get_conn()
     cur = conn.cursor()

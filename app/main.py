@@ -123,3 +123,42 @@ def mock_fga_check(body: dict, request: Request):
         role_key = f'role:manager' if username == 'bob' else f'role:employee'
         allowed = db.check_relationship(role_key, relation, obj)
     return {'allowed': allowed}
+
+
+@app.post('/admin/fga')
+def admin_add_fga(body: dict, user=Depends(get_current_user)):
+    """Add an FGA relationship. Body: {subject, relation, object}. Managers only."""
+    if user.role != 'manager':
+        raise HTTPException(status_code=403, detail='Only managers may modify FGA relationships')
+    subject = body.get('subject')
+    relation = body.get('relation')
+    obj = body.get('object')
+    if not subject or not relation or not obj:
+        raise HTTPException(status_code=400, detail='subject, relation and object are required')
+    db.add_relationship(subject, relation, obj)
+    return {'status': 'ok', 'subject': subject, 'relation': relation, 'object': obj}
+
+
+@app.delete('/admin/fga')
+def admin_remove_fga(body: dict, user=Depends(get_current_user)):
+    """Remove an FGA relationship. Body: {subject, relation, object}. Managers only."""
+    if user.role != 'manager':
+        raise HTTPException(status_code=403, detail='Only managers may modify FGA relationships')
+    subject = body.get('subject')
+    relation = body.get('relation')
+    obj = body.get('object')
+    if not subject or not relation or not obj:
+        raise HTTPException(status_code=400, detail='subject, relation and object are required')
+    ok = db.remove_relationship(subject, relation, obj)
+    if not ok:
+        raise HTTPException(status_code=404, detail='Relationship not found')
+    return {'status': 'ok'}
+
+
+@app.get('/admin/fga')
+def admin_list_fga(user=Depends(get_current_user)):
+    """List all FGA relationships. Managers only."""
+    if user.role != 'manager':
+        raise HTTPException(status_code=403, detail='Only managers may view FGA relationships')
+    rels = db.list_relationships()
+    return {'results': rels}
