@@ -31,6 +31,23 @@ def init_db():
         object TEXT
     )
     """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS user_settings (
+        user_sub TEXT PRIMARY KEY,
+        city TEXT,
+        timezone TEXT,
+        theme TEXT
+    )
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS token_vault (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_sub TEXT,
+        provider TEXT,
+        token TEXT,
+        UNIQUE(user_sub, provider)
+    )
+    """)
     conn.commit()
     conn.close()
     # Build vector store on demand if enabled; leave lazy building to get_vector_store
@@ -142,3 +159,68 @@ def seed_sample_data():
     # everyone can view budget
     add_relationship('role:employee', 'can_view', 'document:doc_budget_q4')
     add_relationship('role:manager', 'can_view', 'document:doc_budget_q4')
+
+    # User settings (first-party profile data consumed by the assistant)
+    set_user_settings('user:alice', city='Seattle', timezone='America/Los_Angeles', theme='light')
+    set_user_settings('user:bob', city='New York', timezone='America/New_York', theme='dark')
+
+    # Optional: seed third-party tokens for demo (used by Token Vault)
+    weather_token = os.getenv('WEATHER_API_TOKEN')
+    if weather_token:
+        upsert_token('user:alice', 'weather', weather_token)
+        upsert_token('user:bob', 'weather', weather_token)
+
+
+def set_user_settings(user_sub: str, city: str, timezone: str | None = None, theme: str | None = None):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO user_settings (user_sub, city, timezone, theme) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(user_sub) DO UPDATE SET city=excluded.city, timezone=excluded.timezone, theme=excluded.theme",
+        (user_sub, city, timezone, theme)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_user_settings(user_sub: str) -> Dict[str, Any] | None:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT city, timezone, theme FROM user_settings WHERE user_sub=?", (user_sub,))
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        return dict(row)
+    return None
+
+
+def upsert_token(user_sub: str, provider: str, token: str):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO token_vault (user_sub, provider, token) VALUES (?, ?, ?) "
+        "ON CONFLICT(user_sub, provider) DO UPDATE SET token=excluded.token",
+        (user_sub, provider, token)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_token(user_sub: str, provider: str) -> str | None:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT token FROM token_vault WHERE user_sub=? AND provider=?", (user_sub, provider))
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        return row['token']
+    return None
+
+
+def list_tokens(user_sub: str) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT provider, token FROM token_vault WHERE user_sub=?", (user_sub,))
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

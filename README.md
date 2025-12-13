@@ -34,6 +34,7 @@ Made by: Varnit Kumar (@vannu07)
 - [Auth0 OIDC (PKCE) dev flow](#auth0-oidc-pkce-dev-flow)
 - [FGA integration points](#fga-integration-points)
 - [Admin (manage relationships)](#admin-manage-relationships)
+- [Context-preserving assistant](#context-preserving-assistant)
 - [Troubleshooting & FAQs](#troubleshooting--faqs)
 - [References & credits](#references--credits)
 
@@ -51,6 +52,7 @@ Made by: Varnit Kumar (@vannu07)
 - Optional FAISS vector retrieval (enable with `USE_VECTOR=1`).
 - Auth0 OIDC PKCE demo flow to get real tokens (developer mode).
 - Local mock FGA endpoint for development and tests.
+- Context-preserving assistant that uses the signed-in user's settings (first-party) and calls a third-party API with a delegated token from a lightweight Token Vault.
 
 ## Screenshots & diagram
 
@@ -106,6 +108,10 @@ export AUTH0_DOMAIN=""
 export AUTH0_CLIENT_ID=""
 export AUTH0_AUDIENCE=""
 export AUTH0_REDIRECT_URI="http://127.0.0.1:8000/auth/callback"
+
+# Optional weather demo
+export WEATHER_API_MODE=offline   # set to "live" to call wttr.in
+export WEATHER_API_TOKEN="<token-for-weather-provider>"  # optional; stored per user
 
 # Dev fallback secret (only for local dev; replace in production)
 export APP_SECRET="devsecret"
@@ -164,6 +170,38 @@ You will be redirected to Auth0 and back to a small developer callback that disp
 - `POST /admin/fga` — add relationship (manager-only). Body: `{subject, relation, object}`.
 - `DELETE /admin/fga` — remove relationship (manager-only).
 - `GET /admin/fga` — list relationships (manager-only).
+
+## Context-preserving assistant
+
+This flow proves that the assistant keeps user identity throughout a session: it reads first-party profile settings and then calls a third-party API with a user-scoped token stored in a lightweight Token Vault.
+
+1) Start the API (see Quickstart) with `WEATHER_API_MODE=offline` for deterministic responses, or `live` to call wttr.in.
+
+2) Login to get a bearer token (example uses the built-in demo users):
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/login \
+	-H 'content-type: application/json' \
+	-d '{"username": "bob"}' | jq -r '.access_token'
+```
+
+3) (Optional) Store a delegated third-party token for weather in the vault (replace `$TOKEN` with the bearer token from step 2):
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/vault/tokens \
+	-H "Authorization: Bearer $TOKEN" \
+	-H 'content-type: application/json' \
+	-d '{"provider": "weather", "token": "demo-weather-token"}'
+```
+
+4) Call the context-preserving endpoint — it will fetch your first-party settings (city/timezone/theme) and then call the third-party weather API using the stored token:
+
+```bash
+curl -s http://127.0.0.1:8000/assistant/contextual-weather \
+	-H "Authorization: Bearer $TOKEN" | jq
+```
+
+Expected: the response references your stored city (first-party) and includes a `weather` block with `used_token: true` showing the delegated token was used. In `offline` mode a deterministic sample is returned; in `live` mode data is fetched from wttr.in.
 
 ## Troubleshooting & FAQs
 

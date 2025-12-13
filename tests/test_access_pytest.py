@@ -1,11 +1,6 @@
 import requests
 import os
 
-    assert 'doc_salary_2024' in ids
-import requests
-import requests
-import os
-
 BASE = os.getenv('BASE', 'http://127.0.0.1:8000')
 
 

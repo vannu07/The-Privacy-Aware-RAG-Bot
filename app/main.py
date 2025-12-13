@@ -1,8 +1,18 @@
 from fastapi import FastAPI, Depends, HTTPException
-from .models import LoginRequest, Document, QueryRequest, QueryResponse
+from .models import (
+    LoginRequest,
+    Document,
+    QueryRequest,
+    QueryResponse,
+    UserSettings,
+    TokenUpsertRequest,
+    ContextualActionResponse,
+)
 from .auth import authenticate, create_access_token, get_current_user
 from . import db
 from .fga import FGAClient
+from .token_vault import TokenVault
+from . import integrations
 from typing import List
 from fastapi import Request
 import os
@@ -12,6 +22,7 @@ from . import oidc
 
 app = FastAPI(title="Privacy-Aware RAG Bot (Demo)")
 fga_client = FGAClient()
+token_vault = TokenVault()
 
 # serve static callback page
 from fastapi.staticfiles import StaticFiles
@@ -81,6 +92,62 @@ def auth_callback(code: str | None = None, state: str | None = None):
     payload = urlencode({'tokens': urlencode({'id_token': tokens.get('id_token', ''), 'access_token': tokens.get('access_token', '')})})
     # redirect to static page with tokens in query
     return RedirectResponse(f'/static/oidc_callback.html?tokens={urlencode([("", str(tokens))])}')
+
+
+@app.get('/me/settings', response_model=UserSettings)
+def get_settings(user=Depends(get_current_user)):
+    settings = db.get_user_settings(user.sub)
+    if not settings:
+        raise HTTPException(status_code=404, detail='No settings found for user')
+    return UserSettings(**settings)
+
+
+@app.put('/me/settings', response_model=UserSettings)
+def update_settings(payload: UserSettings, user=Depends(get_current_user)):
+    db.set_user_settings(user.sub, city=payload.city, timezone=payload.timezone, theme=payload.theme)
+    return payload
+
+
+@app.post('/vault/tokens')
+def store_token(req: TokenUpsertRequest, user=Depends(get_current_user)):
+    token_vault.upsert(user.sub, req.provider, req.token)
+    return {'status': 'stored', 'provider': req.provider}
+
+
+@app.get('/vault/tokens/{provider}')
+def read_token(provider: str, user=Depends(get_current_user)):
+    token = token_vault.fetch(user.sub, provider)
+    if not token:
+        raise HTTPException(status_code=404, detail='Token not found for provider')
+    # In a real vault you would not return the token directly; for demo we mask it.
+    masked = token[:4] + '...' + token[-4:] if len(token) > 8 else '***masked***'
+    return {'provider': provider, 'token_preview': masked}
+
+
+@app.get('/assistant/contextual-weather', response_model=ContextualActionResponse)
+def contextual_weather(user=Depends(get_current_user)):
+    """Demonstrate context preservation: read first-party settings, then call a third-party API using a vault token."""
+    settings = db.get_user_settings(user.sub)
+    if not settings:
+        raise HTTPException(status_code=404, detail='No settings found for user')
+
+    # Fetch delegated token for third-party weather provider from the Token Vault
+    weather_token = token_vault.fetch(user.sub, 'weather')
+    # If user-specific token missing, optionally fall back to a shared token (if seeded)
+    if not weather_token:
+        weather_token = token_vault.fetch('shared', 'weather')
+
+    weather = integrations.fetch_weather(settings.get('city', 'Seattle'), token=weather_token)
+    message = (
+        f"Hi {user.username}, your preferred city is {settings.get('city')}. "
+        f"Current conditions there: {weather.get('description')} at {weather.get('temp_c')}°C."
+    )
+    return ContextualActionResponse(
+        message=message,
+        profile=user,
+        settings=UserSettings(**settings),
+        weather=weather,
+    )
 
 @app.post('/documents/add')
 def add_document(doc: Document, user=Depends(get_current_user)):
