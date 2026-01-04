@@ -50,9 +50,15 @@ Made by: Varnit Kumar (@vannu07)
 
 - Document-level authorization enforced at retrieval time.
 - Optional FAISS vector retrieval (enable with `USE_VECTOR=1`).
+- **🆕 Hybrid search** combining vector embeddings and keyword matching for better accuracy.
+- **🆕 AI Learning capabilities**: feedback loops, conversation history, and analytics.
+- **🆕 LLM integration** for natural language answer generation with citations.
+- **🆕 Query logging and analytics** to track usage patterns and improve over time.
 - Auth0 OIDC PKCE demo flow to get real tokens (developer mode).
 - Local mock FGA endpoint for development and tests.
 - Context-preserving assistant that uses the signed-in user's settings (first-party) and calls a third-party API with a delegated token from a lightweight Token Vault.
+
+> **📖 [See AI_LEARNING.md](AI_LEARNING.md) for comprehensive documentation on AI learning features**
 
 ## Screenshots & diagram
 
@@ -79,6 +85,14 @@ python tests/test_access.py
 ```
 
 Expected: manager (`bob`) sees `doc_salary_2024`, employee (`alice`) does not.
+
+**🆕 Try the AI Learning features demo:**
+
+```bash
+python tests/test_ai_learning.py
+```
+
+This demonstrates feedback loops, conversation history, analytics, and enhanced metadata.
 
 ## Detailed setup
 
