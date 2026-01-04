@@ -24,16 +24,15 @@ jobs:
           for i in {1..30}; do
             if curl -f http://127.0.0.1:8000/health > /dev/null 2>&1; then
               echo "Server is ready!"
-              break
-            fi
-            if [ $i -eq 30 ]; then
-              echo "Server failed to start within 30 seconds"
-              cat server.log
-              exit 1
+              exit 0
             fi
             echo "Waiting for server... ($i/30)"
             sleep 1
           done
+          # If we get here, server didn't start in time
+          echo "Server failed to start within 30 seconds"
+          cat server.log
+          exit 1
       - name: Run tests
         run: |
           pytest -q
