@@ -49,6 +49,11 @@ def startup_event():
             # non-fatal: continue with SQL fallback
             pass
 
+@app.get('/health')
+def health_check():
+    """Health check endpoint for monitoring and CI/CD readiness verification"""
+    return {"status": "ok", "service": "Privacy-Aware RAG Bot"}
+
 @app.post('/login')
 def login(req: LoginRequest):
     user = authenticate(req.username)
