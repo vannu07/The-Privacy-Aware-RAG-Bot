@@ -49,6 +49,11 @@ def startup_event():
             # non-fatal: continue with SQL fallback
             pass
 
+@app.get('/health')
+def health():
+    """Health check endpoint for CI/CD and monitoring."""
+    return {"status": "ok"}
+
 @app.post('/login')
 def login(req: LoginRequest):
     user = authenticate(req.username)

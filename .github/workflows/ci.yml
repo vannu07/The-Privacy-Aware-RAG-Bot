@@ -19,9 +19,31 @@ jobs:
           pip install -r requirements.txt
       - name: Start server
         run: |
-          nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 > server.log 2>&1 &
-          sleep 3
+          uvicorn app.main:app --host 127.0.0.1 --port 8000 > server.log 2>&1 &
+          echo $! > server.pid
+          echo "Server PID: $(cat server.pid)"
+      - name: Wait for server to be ready
+        run: |
+          echo "Waiting for server to start..."
+          for i in {1..30}; do
+            if curl -f http://127.0.0.1:8000/health > /dev/null 2>&1; then
+              echo "Server is ready!"
+              exit 0
+            fi
+            echo "Attempt $i/30: Server not ready yet, waiting..."
+            sleep 2
+          done
+          echo "Server failed to start within 60 seconds"
+          echo "=== Server logs ==="
+          cat server.log
+          exit 1
       - name: Run tests
         run: |
-          pytest -q
+          pytest -v
+      - name: Upload server logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-logs
+          path: server.log
 *** End Patch
