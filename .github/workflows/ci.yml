@@ -24,7 +24,7 @@ jobs:
           for i in {1..30}; do
             if curl -f http://127.0.0.1:8000/health > /dev/null 2>&1; then
               echo "Server is ready!"
-              exit 0
+              break
             fi
             echo "Waiting for server... ($i/30)"
             sleep 1
