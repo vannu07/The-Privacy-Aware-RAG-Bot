@@ -1,0 +1,24 @@
+# Configuration for GitHub Actions labeler
+# See https://github.com/actions/labeler for documentation
+
+documentation:
+  - '**/*.md'
+  - 'LICENSE'
+
+tests:
+  - 'tests/**/*'
+  - 'pytest.ini'
+
+backend:
+  - 'app/**/*'
+
+dependencies:
+  - 'requirements.txt'
+  - 'Dockerfile'
+
+ci:
+  - '.github/workflows/**/*'
+
+configuration:
+  - '.github/**/*'
+  - '.gitignore'
