@@ -7,22 +7,31 @@ from .models import (
     UserSettings,
     TokenUpsertRequest,
     ContextualActionResponse,
+    FeedbackRequest,
+    ConversationHistory,
+    QueryLog,
+    AnalyticsResponse,
+    LLMRequest,
 )
 from .auth import authenticate, create_access_token, get_current_user
 from . import db
 from .fga import FGAClient
 from .token_vault import TokenVault
 from . import integrations
-from typing import List
+from .llm import get_llm_client
+from typing import List, Optional
 from fastapi import Request
 import os
 from fastapi.responses import RedirectResponse, HTMLResponse
 from urllib.parse import urlencode
 from . import oidc
+import time
+import uuid
 
 app = FastAPI(title="Privacy-Aware RAG Bot (Demo)")
 fga_client = FGAClient()
 token_vault = TokenVault()
+llm_client = get_llm_client()
 
 # serve static callback page
 from fastapi.staticfiles import StaticFiles
@@ -159,19 +168,82 @@ def add_document(doc: Document, user=Depends(get_current_user)):
 
 @app.post('/query', response_model=QueryResponse)
 def query(req: QueryRequest, user=Depends(get_current_user)):
+    start_time = time.time()
+    
+    # Generate session ID if not provided
+    session_id = req.session_id or str(uuid.uuid4())
+    
+    # Add user query to conversation history
+    db.add_conversation_message(session_id, user.sub, 'user', req.query)
+    
     hits = db.search_documents(req.query)
     allowed = []
+    retrieved_doc_ids = []
+    
     for h in hits:
         doc_id = h['id']
         # For FGA checks we'll construct subject as user.sub (e.g., user:bob)
         subject = user.sub
         obj = f'document:{doc_id}'
         if fga_client.check(subject, 'can_view', obj):
-            allowed.append(Document(id=doc_id, title=h['title'], content=h['content'], sensitive=bool(h['sensitive'])))
+            # Increment view count for analytics
+            db.increment_doc_view_count(doc_id)
+            
+            doc = Document(
+                id=doc_id, 
+                title=h['title'], 
+                content=h['content'], 
+                sensitive=bool(h['sensitive']),
+                author=h.get('author'),
+                created_at=h.get('created_at'),
+                updated_at=h.get('updated_at'),
+                version=h.get('version'),
+                department=h.get('department'),
+                tags=h.get('tags'),
+                view_count=h.get('view_count', 0),
+                helpful_count=h.get('helpful_count', 0)
+            )
+            allowed.append(doc)
+            retrieved_doc_ids.append(doc_id)
         else:
             # not allowed: skip
             pass
-    return QueryResponse(results=allowed)
+    
+    # Optional: Generate LLM answer if enabled
+    generated_answer = None
+    confidence = None
+    
+    if os.getenv('USE_LLM') == '1' and allowed:
+        try:
+            # Get conversation history
+            conv_history = db.get_conversation_history(session_id, limit=10)
+            history_msgs = [
+                type('ConversationMessage', (), msg)() 
+                for msg in conv_history[:-1]  # Exclude current query
+            ]
+            
+            llm_response = llm_client.generate_answer(req.query, allowed, history_msgs)
+            generated_answer = llm_response.answer
+            confidence = llm_response.confidence
+            
+            # Add assistant response to conversation history
+            db.add_conversation_message(session_id, user.sub, 'assistant', 
+                                       generated_answer, llm_response.citations)
+        except Exception as e:
+            # Non-fatal: continue without LLM answer
+            print(f"LLM error: {e}")
+    
+    # Log query for analytics
+    latency_ms = (time.time() - start_time) * 1000
+    query_id = db.log_query(user.sub, req.query, session_id, retrieved_doc_ids, 
+                           latency_ms, confidence)
+    
+    return QueryResponse(
+        results=allowed, 
+        query_id=query_id, 
+        confidence=confidence,
+        generated_answer=generated_answer
+    )
 
 
 @app.post('/mock-fga/check')
@@ -229,3 +301,71 @@ def admin_list_fga(user=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail='Only managers may view FGA relationships')
     rels = db.list_relationships()
     return {'results': rels}
+
+
+# AI Learning Endpoints
+
+@app.post('/feedback')
+def submit_feedback(feedback: FeedbackRequest, user=Depends(get_current_user)):
+    """Submit feedback on a query result for AI learning"""
+    try:
+        db.add_feedback(
+            feedback.query_id,
+            feedback.rating,
+            feedback.helpful,
+            feedback.comment,
+            feedback.relevant_doc_ids
+        )
+        return {'status': 'ok', 'query_id': feedback.query_id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f'Failed to submit feedback: {str(e)}')
+
+
+@app.get('/conversation/{session_id}', response_model=ConversationHistory)
+def get_conversation(session_id: str, user=Depends(get_current_user)):
+    """Get conversation history for a session"""
+    messages = db.get_conversation_history(session_id, limit=50)
+    if not messages:
+        raise HTTPException(status_code=404, detail='No conversation found for this session')
+    
+    return ConversationHistory(
+        session_id=session_id,
+        user_id=user.sub,
+        messages=messages,
+        created_at=messages[0]['timestamp'] if messages else None,
+        updated_at=messages[-1]['timestamp'] if messages else None
+    )
+
+
+@app.get('/analytics', response_model=AnalyticsResponse)
+def get_analytics(user=Depends(get_current_user)):
+    """Get analytics on queries, documents, and user feedback"""
+    # Only managers can view analytics
+    if user.role != 'manager':
+        raise HTTPException(status_code=403, detail='Only managers may view analytics')
+    
+    analytics = db.get_analytics()
+    return AnalyticsResponse(**analytics)
+
+
+@app.get('/query-logs')
+def get_query_logs(user=Depends(get_current_user), limit: int = 100):
+    """Get query logs for analysis"""
+    # Managers can see all logs, users can only see their own
+    if user.role == 'manager':
+        logs = db.get_query_logs(limit=limit)
+    else:
+        logs = db.get_query_logs(user_id=user.sub, limit=limit)
+    
+    return {'logs': logs}
+
+
+@app.post('/llm/generate')
+def generate_llm_answer(req: LLMRequest, user=Depends(get_current_user)):
+    """Generate an answer using LLM with provided documents"""
+    try:
+        response = llm_client.generate_answer(req.query, req.context_docs, req.conversation_history)
+        return response
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f'LLM generation failed: {str(e)}')
+
