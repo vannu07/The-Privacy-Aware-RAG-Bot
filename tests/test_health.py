@@ -10,4 +10,4 @@ def test_health_check():
     resp.raise_for_status()
     data = resp.json()
     assert data['status'] == 'ok'
-    assert 'service' in data
+    assert data['service'] == 'Privacy-Aware RAG Bot'
