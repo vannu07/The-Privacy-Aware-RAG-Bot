@@ -3,6 +3,9 @@ from pathlib import Path
 from typing import List, Dict, Any, Tuple
 import os
 from .vector_store import VectorStore
+from datetime import datetime
+import uuid
+import json
 
 DB_PATH = Path(__file__).parent / "data.db"
 
@@ -20,7 +23,15 @@ def init_db():
         id TEXT PRIMARY KEY,
         title TEXT,
         content TEXT,
-        sensitive INTEGER DEFAULT 0
+        sensitive INTEGER DEFAULT 0,
+        author TEXT,
+        created_at TEXT,
+        updated_at TEXT,
+        version TEXT,
+        department TEXT,
+        tags TEXT,
+        view_count INTEGER DEFAULT 0,
+        helpful_count INTEGER DEFAULT 0
     )
     """)
     cur.execute("""
@@ -47,6 +58,53 @@ def init_db():
         token TEXT,
         UNIQUE(user_sub, provider)
     )
+    """)
+    # New tables for AI learning
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS query_logs (
+        query_id TEXT PRIMARY KEY,
+        user_id TEXT,
+        query TEXT,
+        session_id TEXT,
+        results_count INTEGER,
+        retrieved_doc_ids TEXT,
+        timestamp TEXT,
+        latency_ms REAL,
+        confidence REAL,
+        feedback_rating INTEGER
+    )
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS feedback (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        query_id TEXT,
+        rating INTEGER,
+        helpful INTEGER,
+        comment TEXT,
+        relevant_doc_ids TEXT,
+        timestamp TEXT,
+        FOREIGN KEY (query_id) REFERENCES query_logs(query_id)
+    )
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS conversation_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT,
+        user_id TEXT,
+        role TEXT,
+        content TEXT,
+        doc_ids TEXT,
+        timestamp TEXT
+    )
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_query_logs_user ON query_logs(user_id)
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_query_logs_timestamp ON query_logs(timestamp)
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_conversation_session ON conversation_history(session_id)
     """)
     conn.commit()
     conn.close()
@@ -79,12 +137,17 @@ def get_vector_store():
         _vector_store = build_vector_store()
     return _vector_store
 
-def add_document(doc_id: str, title: str, content: str, sensitive: bool = False):
+def add_document(doc_id: str, title: str, content: str, sensitive: bool = False, author: str = None, 
+                 department: str = None, tags: List[str] = None):
     conn = get_conn()
     cur = conn.cursor()
+    now = datetime.utcnow().isoformat()
+    tags_json = json.dumps(tags) if tags else None
     cur.execute(
-        "INSERT OR REPLACE INTO documents (id, title, content, sensitive) VALUES (?, ?, ?, ?)",
-        (doc_id, title, content, 1 if sensitive else 0)
+        """INSERT OR REPLACE INTO documents 
+           (id, title, content, sensitive, author, created_at, updated_at, version, department, tags, view_count, helpful_count) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)""",
+        (doc_id, title, content, 1 if sensitive else 0, author, now, now, "1.0", department, tags_json)
     )
     conn.commit()
     conn.close()
@@ -99,20 +162,33 @@ def search_documents(keyword: str) -> List[Dict[str, Any]]:
         conn = get_conn()
         cur = conn.cursor()
         for h in hits:
-            cur.execute("SELECT id, title, content, sensitive FROM documents WHERE id=?", (h['id'],))
+            cur.execute("""SELECT id, title, content, sensitive, author, created_at, updated_at, 
+                          version, department, tags, view_count, helpful_count 
+                          FROM documents WHERE id=?""", (h['id'],))
             r = cur.fetchone()
             if r:
-                results.append(dict(r))
+                doc_dict = dict(r)
+                if doc_dict.get('tags'):
+                    doc_dict['tags'] = json.loads(doc_dict['tags'])
+                results.append(doc_dict)
         conn.close()
         return results
     else:
         conn = get_conn()
         cur = conn.cursor()
         q = f"%{keyword}%"
-        cur.execute("SELECT id, title, content, sensitive FROM documents WHERE title LIKE ? OR content LIKE ?", (q, q))
+        cur.execute("""SELECT id, title, content, sensitive, author, created_at, updated_at, 
+                      version, department, tags, view_count, helpful_count 
+                      FROM documents WHERE title LIKE ? OR content LIKE ?""", (q, q))
         rows = cur.fetchall()
         conn.close()
-        return [dict(r) for r in rows]
+        results = []
+        for r in rows:
+            doc_dict = dict(r)
+            if doc_dict.get('tags'):
+                doc_dict['tags'] = json.loads(doc_dict['tags'])
+            results.append(doc_dict)
+        return results
 
 def add_relationship(subject: str, relation: str, obj: str):
     conn = get_conn()
@@ -224,3 +300,164 @@ def list_tokens(user_sub: str) -> List[Dict[str, Any]]:
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# AI Learning Functions
+
+def log_query(user_id: str, query: str, session_id: str, retrieved_docs: List[str], 
+              latency_ms: float = None, confidence: float = None) -> str:
+    """Log a query for analytics and learning"""
+    query_id = str(uuid.uuid4())
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO query_logs 
+           (query_id, user_id, query, session_id, results_count, retrieved_doc_ids, timestamp, latency_ms, confidence)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (query_id, user_id, query, session_id, len(retrieved_docs), json.dumps(retrieved_docs), 
+         datetime.utcnow().isoformat(), latency_ms, confidence)
+    )
+    conn.commit()
+    conn.close()
+    return query_id
+
+
+def add_feedback(query_id: str, rating: int, helpful: bool = None, 
+                 comment: str = None, relevant_doc_ids: List[str] = None):
+    """Add user feedback to a query"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO feedback (query_id, rating, helpful, comment, relevant_doc_ids, timestamp)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (query_id, rating, 1 if helpful else 0 if helpful is not None else None, 
+         comment, json.dumps(relevant_doc_ids) if relevant_doc_ids else None, datetime.utcnow().isoformat())
+    )
+    # Update query log with feedback rating
+    cur.execute("UPDATE query_logs SET feedback_rating = ? WHERE query_id = ?", (rating, query_id))
+    # Update document helpful counts
+    if relevant_doc_ids:
+        for doc_id in relevant_doc_ids:
+            cur.execute("UPDATE documents SET helpful_count = helpful_count + 1 WHERE id = ?", (doc_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_query_logs(user_id: str = None, limit: int = 100) -> List[Dict[str, Any]]:
+    """Get query logs for analytics"""
+    conn = get_conn()
+    cur = conn.cursor()
+    if user_id:
+        cur.execute(
+            """SELECT * FROM query_logs WHERE user_id = ? 
+               ORDER BY timestamp DESC LIMIT ?""", (user_id, limit))
+    else:
+        cur.execute("SELECT * FROM query_logs ORDER BY timestamp DESC LIMIT ?", (limit,))
+    rows = cur.fetchall()
+    conn.close()
+    results = []
+    for r in rows:
+        log = dict(r)
+        log['retrieved_doc_ids'] = json.loads(log['retrieved_doc_ids']) if log['retrieved_doc_ids'] else []
+        results.append(log)
+    return results
+
+
+def add_conversation_message(session_id: str, user_id: str, role: str, 
+                             content: str, doc_ids: List[str] = None):
+    """Add a message to conversation history"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO conversation_history (session_id, user_id, role, content, doc_ids, timestamp)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (session_id, user_id, role, content, json.dumps(doc_ids) if doc_ids else None, 
+         datetime.utcnow().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_conversation_history(session_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+    """Get conversation history for a session"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT role, content, doc_ids, timestamp FROM conversation_history 
+           WHERE session_id = ? ORDER BY timestamp ASC LIMIT ?""", (session_id, limit))
+    rows = cur.fetchall()
+    conn.close()
+    results = []
+    for r in rows:
+        msg = dict(r)
+        msg['doc_ids'] = json.loads(msg['doc_ids']) if msg['doc_ids'] else []
+        results.append(msg)
+    return results
+
+
+def get_analytics() -> Dict[str, Any]:
+    """Get analytics data for AI learning insights"""
+    conn = get_conn()
+    cur = conn.cursor()
+    
+    # Total queries
+    cur.execute("SELECT COUNT(*) as total FROM query_logs")
+    total_queries = cur.fetchone()['total']
+    
+    # Average results per query
+    cur.execute("SELECT AVG(results_count) as avg FROM query_logs")
+    avg_results = cur.fetchone()['avg'] or 0
+    
+    # Average rating
+    cur.execute("SELECT AVG(feedback_rating) as avg FROM query_logs WHERE feedback_rating IS NOT NULL")
+    avg_rating = cur.fetchone()['avg']
+    
+    # Top queries (most frequent)
+    cur.execute("""
+        SELECT query, COUNT(*) as count 
+        FROM query_logs 
+        GROUP BY query 
+        ORDER BY count DESC 
+        LIMIT 10
+    """)
+    top_queries = [dict(r) for r in cur.fetchall()]
+    
+    # Popular documents (most retrieved and helpful)
+    cur.execute("""
+        SELECT id, title, view_count, helpful_count 
+        FROM documents 
+        ORDER BY helpful_count DESC, view_count DESC 
+        LIMIT 10
+    """)
+    popular_docs = [dict(r) for r in cur.fetchall()]
+    
+    # Failed queries (no results or low ratings)
+    cur.execute("""
+        SELECT query, results_count, feedback_rating 
+        FROM query_logs 
+        WHERE results_count = 0 OR feedback_rating < 0
+        ORDER BY timestamp DESC 
+        LIMIT 10
+    """)
+    failed_queries = [dict(r) for r in cur.fetchall()]
+    
+    conn.close()
+    
+    return {
+        'total_queries': total_queries,
+        'avg_results_per_query': float(avg_results),
+        'avg_rating': float(avg_rating) if avg_rating else None,
+        'top_queries': top_queries,
+        'popular_documents': popular_docs,
+        'failed_queries': failed_queries
+    }
+
+
+def increment_doc_view_count(doc_id: str):
+    """Increment view count when a document is accessed"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE documents SET view_count = view_count + 1 WHERE id = ?", (doc_id,))
+    conn.commit()
+    conn.close()
+
