@@ -7,3 +7,8 @@ httpx
 sentence-transformers
 faiss-cpu
 numpy
+
+# Optional LLM providers (install as needed)
+# openai>=1.0.0
+# anthropic>=0.8.0
+
