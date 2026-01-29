@@ -36,19 +36,35 @@ jobs:
     # Only run on push/schedule events, or on pull_request events from the same repository (not forks)
     # This prevents failures due to missing secrets and insufficient permissions on fork PRs
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
     steps:
       # Checkout the repository to the GitHub Actions runner
       - name: Checkout code
         uses: actions/checkout@v4
 
       # Execute Codacy Analysis CLI and generate a SARIF output with the security issues identified during the analysis
-      - name: Run Codacy Analysis CLI
-        if: secrets.CODACY_PROJECT_TOKEN != ''
+      - name: Run Codacy Analysis CLI (with token)
+        if: env.CODACY_PROJECT_TOKEN != ''
         uses: codacy/codacy-analysis-cli-action@d840f886c4bd4edc059706d09c6a1586111c540b
         with:
           # Check https://github.com/codacy/codacy-analysis-cli#project-token to get your project token from your Codacy repository
-          # You can also omit the token and run the tools that support default configurations
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
+          verbose: true
+          output: results.sarif
+          format: sarif
+          # Adjust severity of non-security issues
+          gh-code-scanning-compat: true
+          # Force 0 exit code to allow SARIF file generation
+          # This will handover control about PR rejection to the GitHub side
+          max-allowed-issues: 2147483647
+
+      # Run without token using default configurations if token is not available
+      - name: Run Codacy Analysis CLI (without token)
+        if: env.CODACY_PROJECT_TOKEN == ''
+        uses: codacy/codacy-analysis-cli-action@d840f886c4bd4edc059706d09c6a1586111c540b
+        with:
+          # Running with default configurations without authentication
           verbose: true
           output: results.sarif
           format: sarif
@@ -60,7 +76,6 @@ jobs:
 
       # Upload the SARIF file generated in the previous step
       - name: Upload SARIF results file
-        if: secrets.CODACY_PROJECT_TOKEN != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: results.sarif
